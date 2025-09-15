@@ -21,8 +21,9 @@ def test_get_pv_metadata():
 
 # @pytest.mark.skip(reason="HF files have been changes"
 # " - https://github.com/openclimatefix/open-source-quartz-solar-forecast/issues/292")
+@pytest.mark.parametrize("folder_name", ["30_minutely", "5_minutely"])
 @pytest.mark.integration
-def test_get_pv():
+def test_get_pv(folder_name):
     # make test dataset file
     test_set_df = pd.DataFrame(
         [
@@ -34,4 +35,4 @@ def test_get_pv():
     )
 
     # Collect NWP data from Hugging Face, ICON. (Peter)
-    _ = get_pv_truth(test_set_df)
+    _ = get_pv_truth(test_set_df,folder_name)

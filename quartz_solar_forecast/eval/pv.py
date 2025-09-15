@@ -40,19 +40,19 @@ def get_pv_metadata(testset: pd.DataFrame) -> pd.DataFrame:
     return combined_data
 
 
-def get_pv_truth(testset: pd.DataFrame, horizon_hours: int = 48) -> pd.DataFrame:
+def get_pv_truth(testset: pd.DataFrame, horizon_hours: int = 48 , folder_name : str = '30_minutely') -> pd.DataFrame:
     """Fetch PV generation truth values for given testset.
     Vectorized across pv_id and horizons.
     """
     print("Loading PV data")
 
     cache_dir = "data/pv"
-    parquet_dir = f"{cache_dir}/30_minutely"
+    parquet_dir = f"{cache_dir}/{folder_name}"
 
     if not os.path.exists(parquet_dir):
         print("Downloading PV parquet data from HF...")
         os.makedirs(cache_dir, exist_ok=True)
-        fs.get("datasets/openclimatefix/uk_pv/30_minutely", cache_dir, recursive=True)
+        fs.get(f"datasets/openclimatefix/uk_pv/{folder_name}", cache_dir, recursive=True)
 
     # Find all non-empty parquet files
     files = glob.glob(f"{parquet_dir}/**/*.parquet", recursive=True)
