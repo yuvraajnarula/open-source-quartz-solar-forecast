@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 from huggingface_hub import HfFileSystem
-
+import pyarrow.compute as pc
+import pyarrow as pa
 fs = HfFileSystem()
 
 
@@ -39,18 +40,22 @@ def get_pv_metadata(testset: pd.DataFrame) -> pd.DataFrame:
     combined_data["timestamp"] = pd.to_datetime(combined_data["timestamp"])
     return combined_data
 
+FOLDER_TO_TIME_RES = {
+    "5_minutely": "5min",
+    "30_minutely": "30min",
+}
 
-def get_pv_truth(testset: pd.DataFrame, horizon_hours: int = 48 , folder_name : str = '30_minutely') -> pd.DataFrame:
-    """Fetch PV generation truth values for given testset.
-    Vectorized across pv_id and horizons.
+def get_pv_truth(testset: pd.DataFrame, horizon_hours: int = 48, folder_name: str = '30_minutely') -> pd.DataFrame:
     """
-    print("Loading PV data")
-
+    Fetch PV generation truth values for given testset.
+    Optimized for performance using Arrow predicate filtering.
+    """
+    
     cache_dir = "data/pv"
     parquet_dir = f"{cache_dir}/{folder_name}"
 
     if not os.path.exists(parquet_dir):
-        print("Downloading PV parquet data from HF...")
+        print("Downloading PV parquet data from HuggingFace...")
         os.makedirs(cache_dir, exist_ok=True)
         fs.get(f"datasets/openclimatefix/uk_pv/{folder_name}", cache_dir, recursive=True)
 
@@ -61,28 +66,58 @@ def get_pv_truth(testset: pd.DataFrame, horizon_hours: int = 48 , folder_name : 
     if not non_empty_files:
         raise FileNotFoundError("No valid parquet files found (all are empty).")
 
-    # Load dataset only from non-empty files
+    # Prepare filtering parameters
+    unique_pv_ids = testset["pv_id"].unique().tolist()
+    min_time = pd.to_datetime(testset["timestamp"]).min()
+    max_time = min_time + pd.Timedelta(hours=horizon_hours)
+
+    # Ensure timestamps are timezone-aware
+    testset["timestamp"] = pd.to_datetime(testset["timestamp"], utc=True)
+
+    # Define dataset with filtering
     dataset = ds.dataset(non_empty_files, format="parquet")
-    pv_data = dataset.to_table().to_pandas()
 
-    # Ensure datetime column is parsed
-    pv_data["datetime_GMT"] = pd.to_datetime(pv_data["datetime_GMT"]).dt.tz_convert("UTC")
+    arrow_min_time = pa.scalar(min_time, type=pa.timestamp('ns', tz='UTC'))
+    arrow_max_time = pa.scalar(max_time, type=pa.timestamp('ns', tz='UTC'))
 
-    # Vectorized expansion
+    filter_expr = (
+        (ds.field("ss_id").isin(unique_pv_ids)) &
+        (ds.field("datetime_GMT") >= arrow_min_time) &
+        (ds.field("datetime_GMT") <= arrow_max_time)
+    )
+
+
+    # Load filtered data only
+    table = dataset.to_table(filter=filter_expr)
+    pv_data = table.to_pandas()
+
+    # Ensure datetime column is parsed and aligned
+    pv_data["datetime_GMT"] = pd.to_datetime(pv_data["datetime_GMT"], utc=True)
+    time_resolution = FOLDER_TO_TIME_RES.get(folder_name)
+    if time_resolution is None:
+        raise ValueError(f"Unknown folder_name '{folder_name}'. Please add it to FOLDER_TO_TIME_RES mapping.")
+
+    pv_data["datetime_GMT"] = pv_data["datetime_GMT"].dt.floor(time_resolution)
+
+    # Expand testset for all horizons
     horizons = np.arange(horizon_hours + 1)
     expanded = testset.loc[testset.index.repeat(len(horizons))].copy()
     expanded["horizon_hour"] = np.tile(horizons, len(testset))
 
-    expanded["timestamp"] = pd.to_datetime(expanded["timestamp"]).dt.tz_localize("UTC")
-    # Merge with pv_data
+    # Calculate actual timestamp for each horizon
+    expanded["timestamp"] = expanded["timestamp"] + pd.to_timedelta(expanded["horizon_hour"], unit="h")
+    expanded["timestamp"] = expanded["timestamp"].dt.floor(time_resolution)  
+    # Merge
     merged = expanded.merge(
         pv_data,
         left_on=["pv_id", "timestamp"],
         right_on=["ss_id", "datetime_GMT"],
         how="left",
     )
+
     # Convert to kWh
     merged["value"] = merged["generation_Wh"] / 1000.0
 
     result = merged[["pv_id", "timestamp", "value", "horizon_hour"]].copy()
+
     return result
