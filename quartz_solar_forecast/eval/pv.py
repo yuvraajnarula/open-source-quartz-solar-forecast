@@ -3,10 +3,10 @@ import os
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.dataset as ds
 from huggingface_hub import HfFileSystem
-import pyarrow.compute as pc
-import pyarrow as pa
+
 fs = HfFileSystem()
 
 
@@ -40,17 +40,21 @@ def get_pv_metadata(testset: pd.DataFrame) -> pd.DataFrame:
     combined_data["timestamp"] = pd.to_datetime(combined_data["timestamp"])
     return combined_data
 
+
 FOLDER_TO_TIME_RES = {
     "5_minutely": "5min",
     "30_minutely": "30min",
 }
 
-def get_pv_truth(testset: pd.DataFrame, horizon_hours: int = 48, folder_name: str = '30_minutely') -> pd.DataFrame:
+
+def get_pv_truth(
+    testset: pd.DataFrame, horizon_hours: int = 48, folder_name: str = "30_minutely"
+) -> pd.DataFrame:
     """
     Fetch PV generation truth values for given testset.
     Optimized for performance using Arrow predicate filtering.
     """
-    
+
     cache_dir = "data/pv"
     parquet_dir = f"{cache_dir}/{folder_name}"
 
@@ -77,15 +81,14 @@ def get_pv_truth(testset: pd.DataFrame, horizon_hours: int = 48, folder_name: st
     # Define dataset with filtering
     dataset = ds.dataset(non_empty_files, format="parquet")
 
-    arrow_min_time = pa.scalar(min_time, type=pa.timestamp('ns', tz='UTC'))
-    arrow_max_time = pa.scalar(max_time, type=pa.timestamp('ns', tz='UTC'))
+    arrow_min_time = pa.scalar(min_time, type=pa.timestamp("ns", tz="UTC"))
+    arrow_max_time = pa.scalar(max_time, type=pa.timestamp("ns", tz="UTC"))
 
     filter_expr = (
-        (ds.field("ss_id").isin(unique_pv_ids)) &
-        (ds.field("datetime_GMT") >= arrow_min_time) &
-        (ds.field("datetime_GMT") <= arrow_max_time)
+        (ds.field("ss_id").isin(unique_pv_ids))
+        & (ds.field("datetime_GMT") >= arrow_min_time)
+        & (ds.field("datetime_GMT") <= arrow_max_time)
     )
-
 
     # Load filtered data only
     table = dataset.to_table(filter=filter_expr)
@@ -95,7 +98,9 @@ def get_pv_truth(testset: pd.DataFrame, horizon_hours: int = 48, folder_name: st
     pv_data["datetime_GMT"] = pd.to_datetime(pv_data["datetime_GMT"], utc=True)
     time_resolution = FOLDER_TO_TIME_RES.get(folder_name)
     if time_resolution is None:
-        raise ValueError(f"Unknown folder_name '{folder_name}'. Please add it to FOLDER_TO_TIME_RES mapping.")
+        raise ValueError(
+            f"Unknown folder_name '{folder_name}'. Please add it to FOLDER_TO_TIME_RES mapping."
+        )
 
     pv_data["datetime_GMT"] = pv_data["datetime_GMT"].dt.floor(time_resolution)
 
@@ -105,8 +110,10 @@ def get_pv_truth(testset: pd.DataFrame, horizon_hours: int = 48, folder_name: st
     expanded["horizon_hour"] = np.tile(horizons, len(testset))
 
     # Calculate actual timestamp for each horizon
-    expanded["timestamp"] = expanded["timestamp"] + pd.to_timedelta(expanded["horizon_hour"], unit="h")
-    expanded["timestamp"] = expanded["timestamp"].dt.floor(time_resolution)  
+    expanded["timestamp"] = expanded["timestamp"] + pd.to_timedelta(
+        expanded["horizon_hour"], unit="h"
+    )
+    expanded["timestamp"] = expanded["timestamp"].dt.floor(time_resolution)
     # Merge
     merged = expanded.merge(
         pv_data,
