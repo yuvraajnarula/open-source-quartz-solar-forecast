@@ -21,6 +21,7 @@ def test_get_pv_metadata():
 
 # @pytest.mark.skip(reason="HF files have been changes"
 # " - https://github.com/openclimatefix/open-source-quartz-solar-forecast/issues/292")
+@pytest.mark.parametrize("folder_name", ["30_minutely", "5_minutely"])
 @pytest.mark.integration
 def test_get_pv(folder_name):
     # make test dataset file
